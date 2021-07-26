@@ -32,7 +32,7 @@ class UrlInfo(object):
     self.repo = repo
     self.original_message_permalink = original_message_permalink
 
-@app.event("message")
+@app.event({"type": "message", "subtype": None})
 def reply(body: dict, say: Say, client, context: BoltContext):
   event = body["event"]
   channel = event.get("channel")
@@ -72,23 +72,16 @@ def reply(body: dict, say: Say, client, context: BoltContext):
   # create new list when adding prs
   new_blocks, num_added = create_new_blocks_for_add(prev_message, url_infos)
 
-  pinned_message_permalink_resp = None
-
   if prev_message:
     # edit existing message
     edit_resp = client.chat_update(channel=channel, ts=prev_message["ts"], blocks=new_blocks)
-    pinned_message_permalink_resp = client.chat_getPermalink(channel=channel, message_ts=prev_message["ts"])
   else:
     # send new message
     message = say(channel=channel, blocks=new_blocks)
     # add new pin
     client.pins_add(channel=channel, timestamp=message.get("ts"))
-    pinned_message_permalink_resp = client.chat_getPermalink(channel=channel, message_ts=message["ts"])
 
-  pinned_message_permalink = None
-  if pinned_message_permalink_resp and pinned_message_permalink_resp["ok"] == True:
-    pinned_message_permalink = pinned_message_permalink_resp["permalink"]
-  follow_up = say(text="Your PR%s been added to the queue%s." % (("s have" if num_added != 1 else " has"), (" <%s|here>" % pinned_message_permalink) if pinned_message_permalink else ""), thread_ts=ts)
+  follow_up = say(text="Your PR%s been added to the queue%s." % (("s have" if num_added != 1 else " has"), (" <%s|here>" % prev_message["permalink"])), thread_ts=ts)
 
 @app.action("remove_from_queue")
 def remove_from_queue(ack, payload, client, body, context: BoltContext):
