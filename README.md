@@ -31,5 +31,6 @@ Bot Token scopes required for the app to function correctly:
 - `groups.history`
 - `pins.read`
 - `pins.write`
+- `users.profile:read`
 
 Make sure your event and interactivity urls route to your `your.server.com/slack/events`.

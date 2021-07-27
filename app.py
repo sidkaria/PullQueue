@@ -18,19 +18,25 @@ ORG_REPOS = []
 
 NUM_HEADER_BLOCKS = 2
 
+NUM_SECTION_BLOCKS = 3
+
 class UrlInfo(object):
   original_message: str
   original_message_permalink: str
   github_url: str
   uid: str
   repo: str
+  pic_link: str
+  date_submitted: str
 
-  def __init__(self, original_message: str, github_url: str, uid: str, repo: str, original_message_permalink: str):
+  def __init__(self, original_message: str, github_url: str, uid: str, repo: str, original_message_permalink: str, pic_link: str, date_submitted: str):
     self.original_message = original_message.replace("\n", "\n> ")
     self.github_url = github_url
     self.uid = uid
     self.repo = repo
     self.original_message_permalink = original_message_permalink
+    self.pic_link = pic_link
+    self.date_submitted = date_submitted
 
 @app.event({"type": "message", "subtype": None})
 def reply(body: dict, say: Say, client, context: BoltContext):
@@ -49,7 +55,13 @@ def reply(body: dict, say: Say, client, context: BoltContext):
   if not urls:
     return
 
-  message_until_first_link = message.partition("<http")[0]
+  message_until_first_link = message.partition("<http")[0].strip()
+
+  # fetch user info
+  user_profile_resp = client.users_profile_get(user=uid)
+  user_image = ""
+  if user_profile_resp.get("ok", False):
+    user_image = user_profile_resp.get("profile")["image_48"]
 
   # grab all github urls in the message
   url_infos = []
@@ -60,7 +72,7 @@ def reply(body: dict, say: Say, client, context: BoltContext):
         if r in url:
           repo = r
           break
-      url_infos.append(UrlInfo(message_until_first_link, url, uid, repo, message_permalink))
+      url_infos.append(UrlInfo(message_until_first_link, url, uid, repo, message_permalink, user_image, ts))
 
   # if no github urls we return
   if not url_infos:
@@ -70,18 +82,24 @@ def reply(body: dict, say: Say, client, context: BoltContext):
   prev_message = find_prev_pinned_message(client, channel, context.bot_user_id)
 
   # create new list when adding prs
-  new_blocks, num_added = create_new_blocks_for_add(prev_message, url_infos)
+  new_blocks = create_new_blocks_for_add(prev_message, url_infos)
+
+  permalink = ""
 
   if prev_message:
     # edit existing message
     edit_resp = client.chat_update(channel=channel, ts=prev_message["ts"], blocks=new_blocks)
+    permalink = " <%s|here>" % prev_message["permalink"]
   else:
     # send new message
     message = say(channel=channel, blocks=new_blocks)
     # add new pin
     client.pins_add(channel=channel, timestamp=message.get("ts"))
+    permalink_resp = client.chat_getPermalink(channel=channel, message_ts=message.get("ts"))
+    if permalink_resp["ok"] == True:
+      permalink = permalink_resp["permalink"]
 
-  follow_up = say(text="Your PR%s been added to the queue%s." % (("s have" if num_added != 1 else " has"), (" <%s|here>" % prev_message["permalink"])), thread_ts=ts)
+  follow_up = say(text="Your PR%s been added to the queue%s." % (("s have" if len(url_infos) != 1 else " has"), permalink), thread_ts=ts)
 
 @app.action("remove_from_queue")
 def remove_from_queue(ack, payload, client, body, context: BoltContext):
@@ -127,7 +145,9 @@ def create_new_blocks_for_add(prev_message, url_infos):
   prev_message_blocks = prev_message.get("blocks", []) if prev_message else _build_header_blocks()
 
   # create new blocks to add, and append them to the previous blocks
-  blocks_to_add = [_build_pr_block(info) for info in url_infos]
+  blocks_to_add = []
+  for info in url_infos:
+    blocks_to_add.extend(_build_pr_blocks(info))
   new_blocks = prev_message_blocks + blocks_to_add
 
   # reassign values for buttons in order
@@ -141,41 +161,53 @@ def create_new_blocks_for_add(prev_message, url_infos):
     new_blocks[0]["text"]["text"] = "There is %s pending PR." % str(num_prs)
   else:
     new_blocks[0]["text"]["text"] = "There are %s pending PRs." % str(num_prs)
-  return new_blocks, len(blocks_to_add)
+  return new_blocks
 
+# delete a section of blocks belonging to the queue item
 def create_new_blocks_for_delete(prev_message, index):
   prev_message_blocks = prev_message.get("blocks") if prev_message else []
+
+  after_delete_blocks = []
+  idx_found = -1
   for idx, block in enumerate(prev_message_blocks):
-    if block.get("accessory", None) and block["accessory"]["value"] == str(index):
-      prev_message_blocks[idx] = _build_completed_block()
-      break
+    if idx_found == -1 and block.get("accessory", None) and block["accessory"]["value"] == str(index):
+      after_delete_blocks.append(_build_completed_block())
+      idx_found = idx
+    elif idx_found != -1 and idx in range(idx_found+1, idx_found + NUM_SECTION_BLOCKS):
+      print(block)
+      continue
+    else:
+      after_delete_blocks.append(block)
 
-  num_prs = get_num_prs_from_message_blocks(prev_message_blocks)
+  num_prs = get_num_prs_from_message_blocks(after_delete_blocks)
   if num_prs == 1:
-    prev_message_blocks[0]["text"]["text"] = "There is %s pending PR." % str(num_prs)
+    after_delete_blocks[0]["text"]["text"] = "There is %s pending PR." % str(num_prs)
   else:
-    prev_message_blocks[0]["text"]["text"] = "There are %s pending PRs." % str(num_prs)
+    after_delete_blocks[0]["text"]["text"] = "There are %s pending PRs." % str(num_prs)
 
-  return prev_message_blocks
+  return after_delete_blocks
 
+# remove all blocks with ["text"]["text"] == COMPLETED_TEXT
 def remove_completed_blocks_from_message(message):
   message_remove_completed_blocks = []
   for idx, b in enumerate(message["blocks"]):
-    if idx < NUM_HEADER_BLOCKS or (b.get("text", None) and 
-        b["text"].get("text", None) and b["text"]["text"] != COMPLETED_TEXT):
+    if b.get("text", None) and b["text"].get("text", None) and b["text"]["text"] == COMPLETED_TEXT:
+      continue
+    else:
       message_remove_completed_blocks.append(b)
   message["blocks"] = message_remove_completed_blocks
 
 def get_num_prs_from_message_blocks(message_blocks=[]):
   return sum([block.get("accessory", None) is not None for block in message_blocks])
 
-def _build_pr_block(info: UrlInfo):
-  original_message_text = "> %s" % info.original_message[:100] + ("...%s" % (" <%s|→>" % info.original_message_permalink) if info.original_message_permalink else "")
-  return {
+def _build_pr_blocks(info: UrlInfo):
+  original_message_text = "> %s" % info.original_message[:100] + ((" <%s|...→>" % info.original_message_permalink) if info.original_message_permalink else "")
+  return [
+    {
 			"type": "section",
 			"text": {
 				"type": "mrkdwn",
-				"text": "*<@%s>'s %s pull request:*\n%s\n%s" % (info.uid, info.repo, info.github_url, original_message_text)
+				"text": "<@%s>'s %s pull request:\n%s\n%s" % (info.uid, info.repo, info.github_url, original_message_text)
 			},
 			"accessory": {
 				"type": "button",
@@ -187,7 +219,25 @@ def _build_pr_block(info: UrlInfo):
 				"value": "",
         "action_id": "remove_from_queue"
 			}
-		}
+		},
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "image",
+          "image_url": info.pic_link,
+          "alt_text": info.uid
+        },
+        {
+          "type": "mrkdwn",
+          "text": "<!date^%s^submitted {date_short_pretty} at {time}|submitted some time ago>" % str(int(float(info.date_submitted))),
+        }
+      ]
+    },
+    {
+      "type": "divider"
+    }
+  ]
 
 def _build_completed_block():
   return {
