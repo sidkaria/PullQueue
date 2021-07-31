@@ -12,6 +12,7 @@ app = App(
 URL_REGEX = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
 
 COMPLETED_TEXT = ":white_check_mark: Completed"
+ORIGINAL_MESSAGE_LINK_TEXT = "...→"
 
 # SET THIS CUSTOM TO YOUR ORGANIZATION'S REPOS
 ORG_REPOS = []
@@ -19,6 +20,8 @@ ORG_REPOS = []
 NUM_HEADER_BLOCKS = 2
 
 NUM_SECTION_BLOCKS = 3
+
+SHOULD_SEND_ADD_QUEUE_MESSAGE = False
 
 class UrlInfo(object):
   original_message: str
@@ -99,17 +102,26 @@ def reply(body: dict, say: Say, client, context: BoltContext):
     if permalink_resp["ok"] == True:
       permalink = permalink_resp["permalink"]
 
-  follow_up = say(text="Your PR%s been added to the queue%s." % (("s have" if len(url_infos) != 1 else " has"), permalink), thread_ts=ts)
+  if SHOULD_SEND_ADD_QUEUE_MESSAGE:
+    follow_up = say(text="Your PR%s been added to the queue%s." % (("s have" if len(url_infos) != 1 else " has"), permalink), thread_ts=ts)
 
 @app.action("remove_from_queue")
-def remove_from_queue(ack, payload, client, body, context: BoltContext):
+def remove_from_queue(ack, payload, client, body, context: BoltContext, say: Say):
   ack()
   channel = body["channel"]["id"]
 
+  user_id = body["user"]["id"]
+
+  index = int(payload["value"])
+
   prev_message = find_prev_pinned_message(client, channel, context.bot_user_id, False)
-  new_blocks = create_new_blocks_for_delete(prev_message, int(payload["value"]))
+  find_original_message_from_prev_message_and_index(prev_message, index)
+  new_blocks = create_new_blocks_for_delete(prev_message, index)
 
   edit_resp = client.chat_update(channel=channel, ts=prev_message["ts"], blocks=new_blocks)
+  if edit_resp["ok"] == True:
+    github_url, original_message_ts = find_original_message_from_prev_message_and_index(prev_message, index)
+    follow_up = say(text="Your PR (%s) has been completed by <@%s> and removed from the queue." % (github_url, user_id), thread_ts=original_message_ts)
 
 @app.command("/prs")
 def handle_show_prs(ack, say, client, body, context: BoltContext):
@@ -174,7 +186,6 @@ def create_new_blocks_for_delete(prev_message, index):
       after_delete_blocks.append(_build_completed_block())
       idx_found = idx
     elif idx_found != -1 and idx in range(idx_found+1, idx_found + NUM_SECTION_BLOCKS):
-      print(block)
       continue
     else:
       after_delete_blocks.append(block)
@@ -186,6 +197,17 @@ def create_new_blocks_for_delete(prev_message, index):
     after_delete_blocks[0]["text"]["text"] = "There are %s pending PRs." % str(num_prs)
 
   return after_delete_blocks
+
+def find_original_message_from_prev_message_and_index(prev_message, index):
+  prev_message_blocks = prev_message.get("blocks") if prev_message else []
+  link_re = rf"<(.*)\|{ORIGINAL_MESSAGE_LINK_TEXT}"
+  for idx, block in enumerate(prev_message_blocks):
+    if block.get("accessory", None) and block["accessory"]["value"] == str(index):
+      text_of_section = block["text"]["text"]
+      github_link = text_of_section.splitlines()[1]
+      original_message_ts = prev_message_blocks[idx+1]["elements"][0]["alt_text"]
+      return github_link, original_message_ts
+  return None, None
 
 # remove all blocks with ["text"]["text"] == COMPLETED_TEXT
 def remove_completed_blocks_from_message(message):
@@ -201,7 +223,7 @@ def get_num_prs_from_message_blocks(message_blocks=[]):
   return sum([block.get("accessory", None) is not None for block in message_blocks])
 
 def _build_pr_blocks(info: UrlInfo):
-  original_message_text = "> %s" % info.original_message[:100] + ((" <%s|...→>" % info.original_message_permalink) if info.original_message_permalink else "")
+  original_message_text = "> %s" % info.original_message[:100] + (" <%s|%s>" % (info.original_message_permalink, ORIGINAL_MESSAGE_LINK_TEXT) if info.original_message_permalink else "")
   return [
     {
 			"type": "section",
@@ -226,7 +248,7 @@ def _build_pr_blocks(info: UrlInfo):
         {
           "type": "image",
           "image_url": info.pic_link,
-          "alt_text": info.uid
+          "alt_text": info.date_submitted
         },
         {
           "type": "mrkdwn",

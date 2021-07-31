@@ -1,0 +1,41 @@
+_metadata:
+  major_version: 1
+  minor_version: 1
+display_information:
+  name: PullQueue
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: PullQueue
+    always_online: false
+  slash_commands:
+    - command: /prs
+      url: https://your.server.url/slack/events
+      description: Show list of pending PRs.
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:history
+      - chat:write
+      - commands
+      - groups:history
+      - pins:read
+      - pins:write
+      - users.profile:read
+settings:
+  event_subscriptions:
+    request_url: https://your.server.url/slack/events
+    bot_events:
+      - app_home_opened
+      - message.channels
+  interactivity:
+    is_enabled: true
+    request_url: https://your.server.url/slack/events
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
