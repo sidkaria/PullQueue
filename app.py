@@ -2,6 +2,7 @@ import os
 import re
 # Use the package we installed
 from slack_bolt import App, Say, BoltContext
+from variables import *
 
 # Initializes your app with your bot token and signing secret
 app = App(
@@ -14,14 +15,9 @@ URL_REGEX = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0
 COMPLETED_TEXT = ":white_check_mark: Completed"
 ORIGINAL_MESSAGE_LINK_TEXT = "...→"
 
-# SET THIS CUSTOM TO YOUR ORGANIZATION'S REPOS
-ORG_REPOS = []
-
 NUM_HEADER_BLOCKS = 2
 
 NUM_SECTION_BLOCKS = 3
-
-SHOULD_SEND_ADD_QUEUE_MESSAGE = False
 
 class UrlInfo(object):
   original_message: str
@@ -139,6 +135,15 @@ def handle_show_prs(ack, say, client, body, context: BoltContext):
   message = say(text="PRs are pending.", blocks=prev_message["blocks"], channel=channel)
   # add new pin
   client.pins_add(channel=channel, timestamp=message.get("ts"))
+
+@app.command("/clear_completed")
+def clear_completed_text(ack, client, body, context: BoltContext):
+  ack()
+  channel = body["channel_id"]
+
+  prev_message = find_prev_pinned_message(client, channel, context.bot_user_id)
+  if prev_message.get("blocks", None):
+    client.chat_update(channel=channel, ts=prev_message["ts"], blocks=prev_message["blocks"])
 
 def find_prev_pinned_message(client, channel, bot_user_id, should_remove_completed=True):
   prev_message = None
