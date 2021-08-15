@@ -16,8 +16,6 @@ URL_REGEX = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0
 COMPLETED_TEXT = ":white_check_mark: Completed"
 ORIGINAL_MESSAGE_LINK_TEXT = "...→"
 
-NUM_HEADER_BLOCKS = 2
-
 class UrlInfo(object):
   original_message: str
   original_message_permalink: str
@@ -29,7 +27,7 @@ class UrlInfo(object):
 
   def __init__(self, original_message: str, github_url: str, uid: str, repo: str, original_message_permalink: str, pic_link: str, date_submitted: str):
     self.original_message = original_message.replace("\n", "\n> ")
-    self.github_url = github_url
+    self.github_url = github_url.strip("><")
     self.uid = uid
     self.repo = repo
     self.original_message_permalink = original_message_permalink
@@ -37,7 +35,7 @@ class UrlInfo(object):
     self.date_submitted = date_submitted
 
 @app.event({"type": "message", "subtype": None})
-def reply(body: dict, say: Say, client, context: BoltContext):
+def on_message(body: dict, say: Say, client, context: BoltContext):
   try:
     event = body["event"]
     channel = event.get("channel")
@@ -104,6 +102,52 @@ def reply(body: dict, say: Say, client, context: BoltContext):
     if e.response["error"] == "invalid_blocks":
       say(text="Slack has a hard limit of 50 blocks per message. Looks like 1. your PR request exceeded that and 2. we have too many pending PRs :triumph:\nTime to start cleaning up!")
 
+@app.event("reaction_added")
+def on_reaction_added(body: dict, say: Say, client, context: BoltContext):
+  event = body["event"]
+  reaction = event.get("reaction")
+  uid = event.get("user")
+  channel = event.get("item")["channel"]
+  item_ts = event.get("item")["ts"]
+
+  if reaction not in LIST_COMPLETE_REACTIONS:
+    return
+
+  # find text of message reacted to
+  message_reacted_to = client.conversations_history(
+      channel=channel,
+      inclusive=True,
+      oldest=item_ts,
+      limit=1
+  )["messages"][0]["text"]
+
+  # find urls in message reacted to
+  urls = re.findall(URL_REGEX, str(message_reacted_to))
+  if not urls:
+    return
+  github_urls_in_message_reacted_to = []
+  for url in urls:
+    if "github.com" in url:
+      github_urls_in_message_reacted_to.append(url.strip("><"))
+
+  prev_message = find_prev_pinned_message(client, channel, context.bot_user_id)
+  if not prev_message:
+    return
+
+  # find indices of info from original message to remove, based on which
+  # index has a pr link that is in the links in the message reacted to
+  found_indices = []
+  for b in prev_message.get("blocks", []):
+    if b.get("accessory", None):
+      if b["text"]["text"].splitlines()[1].strip("><") in github_urls_in_message_reacted_to:
+        found_indices.append(int(b["accessory"]["value"]))
+
+  # run delete on the message for each of these found indices
+  for x in found_indices:
+    prev_message["blocks"] = create_new_blocks_for_delete(prev_message, x)
+  
+  edit_resp = client.chat_update(channel=channel, ts=prev_message["ts"], blocks=prev_message["blocks"])
+
 @app.action("remove_from_queue")
 def remove_from_queue(ack, payload, client, body, context: BoltContext, say: Say):
   ack()
@@ -162,6 +206,10 @@ def remove_dividers_from_message(ack, client, body, context: BoltContext):
   if prev_message.get("blocks", None):
     client.chat_update(channel=channel, ts=prev_message["ts"], blocks=new_blocks)
 
+"""
+The following methods are internal functionality for the listeners above.
+"""
+
 def find_prev_pinned_message(client, channel, bot_user_id, should_remove_completed=True):
   prev_message = None
   items = client.pins_list(channel=channel).get("items")
@@ -198,7 +246,7 @@ def create_new_blocks_for_add(prev_message, url_infos):
   return new_blocks
 
 # delete a section of blocks belonging to the queue item
-def create_new_blocks_for_delete(prev_message, index):
+def create_new_blocks_for_delete(prev_message, index):  # TODO: change index param to list of indices for better performance
   prev_message_blocks = prev_message.get("blocks") if prev_message else []
 
   after_delete_blocks = []

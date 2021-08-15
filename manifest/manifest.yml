@@ -26,6 +26,7 @@ oauth_config:
       - groups:history
       - pins:read
       - pins:write
+      - reactions:read
       - users.profile:read
 settings:
   event_subscriptions:
@@ -33,6 +34,7 @@ settings:
     bot_events:
       - app_home_opened
       - message.channels
+      - reaction_added
   interactivity:
     is_enabled: true
     request_url: https://your.server.url/slack/events

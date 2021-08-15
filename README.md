@@ -15,13 +15,18 @@ PullQueue is a lightweight slack bot/app that listens for all messages in a chan
     - Link to original message sent in the channel
     - Complete button to remove it from the queue
 4. The bot will send a message reply to the original message, confirming that it has added the person's request(s) to the queue.
+6. You can modify the variables in `variables.py` for additional optional features
+    - Reactions to original messages can remove items from the queue
+    - Show organization repo in the information text in the queue
+    - Feedback text when removing item from queue
+    - Reply to original thread saying the PRs have been added to the queue
 5. You can also call `/prs` for the bot to re-send the queue to the channel and pin it again.
 
 ---
 
 ## Setup
 
-Clone the repo. Follow instructions to [create a slack app for your workspace](https://api.slack.com/start/building/bolt-python) and run the app, using this repo as the code for your app.
+Clone the repo. Follow instructions to [create a slack app for your workspace](https://api.slack.com/start/building/bolt-python) and run the app, using this repo as the code for your app. You can either use the manifest included in `./manifest/manifest.yml` to create your app's settings in the Slack API portal, or manually tweak the scopes and event subscriptions:
 
 Bot Token scopes required for the app to function correctly:
 - `app_mentions:read`
@@ -31,6 +36,11 @@ Bot Token scopes required for the app to function correctly:
 - `groups.history`
 - `pins.read`
 - `pins.write`
+- `reactions:read`
 - `users.profile:read`
+
+Bot event subscriptions should include:
+- `message.channels`
+- `reaction_added`
 
 Make sure your event and interactivity urls route to your `your.server.com/slack/events`.
