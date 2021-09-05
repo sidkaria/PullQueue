@@ -2,14 +2,24 @@ import os
 import re
 # Use the package we installed
 from slack_bolt import App, Say, BoltContext
+from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from variables import *
+from apscheduler.schedulers.background import BackgroundScheduler
+
+slack_token = os.environ["SLACK_BOT_TOKEN"]
 
 # Initializes your app with your bot token and signing secret
 app = App(
-    token=os.environ.get("SLACK_BOT_TOKEN"),
+    token=slack_token,
     signing_secret=os.environ.get("SLACK_SIGNING_SECRET")
 )
+
+# client is needed for the reminder scheduler
+client = WebClient(token=slack_token)
+
+# which channels to send reminder to. Reset every time slack bot is reset
+reminder_channels = set()
 
 URL_REGEX = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
 
@@ -182,6 +192,21 @@ def handle_show_prs(ack, say, client, body, context: BoltContext):
   message = say(text="PRs are pending.", blocks=prev_message["blocks"], channel=channel)
   # add new pin
   client.pins_add(channel=channel, timestamp=message.get("ts"))
+
+@app.command("/start_reminders")
+def add_to_reminders(ack, body):
+  ack()
+  channel = body["channel_id"]
+
+  reminder_channels.add(channel)
+
+@app.command("/stop_reminders")
+def stop_reminders(ack, body, say):
+  ack()
+  channel = body["channel_id"]
+
+  reminder_channels.remove(channel)
+  message = say(text="You will no longer be reminded of pending PRs every morning.", channel=channel)
 
 @app.command("/clear_completed")
 def clear_completed_text(ack, client, body, context: BoltContext):
@@ -361,6 +386,28 @@ def _build_header_blocks():
     }
   ]
 
+# this is used for background scheduler that sends reminder message
+# every morning without direct access to slack bolt client.
+def send_message():
+  test = client.auth_test()
+  bot_id = test.get("user_id")
+  if not bot_id:
+    return
+  for channel in reminder_channels:
+    prev_message = find_prev_pinned_message(client, channel, bot_id)
+    num_prs = get_num_prs_from_message_blocks(prev_message.get("blocks",[])) if prev_message else 0
+    if num_prs == 1:
+      message = "Good morning! There is %s pending PR." % str(num_prs)
+    else:
+      message = "Good morning! There are %s pending PRs." % str(num_prs)
+    response = client.chat_postMessage(
+      channel=channel,
+      text=message
+    )
+
 # Start your app
 if __name__ == "__main__":
-    app.start(port=int(os.environ.get("PORT", 3000)))
+  scheduler = BackgroundScheduler()
+  scheduler.add_job(send_message, 'cron', day_of_week="mon-fri", hour=9)
+  scheduler.start()
+  app.start(port=int(os.environ.get("PORT", 3000)))
