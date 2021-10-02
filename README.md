@@ -21,6 +21,7 @@ PullQueue is a lightweight slack bot/app that listens for all messages in a chan
     - Feedback text when removing item from queue
     - Reply to original thread saying the PRs have been added to the queue
 5. You can also call `/prs` for the bot to re-send the queue to the channel and pin it again.
+6. This bot also has support for daily morning reminders with `/startreminders`
 
 ---
 
@@ -44,3 +45,8 @@ Bot event subscriptions should include:
 - `reaction_added`
 
 Make sure your event and interactivity urls route to your `your.server.com/slack/events`.
+
+Also make sure to add the necessary slash events and route them to `your.server.com/slack/events`:
+- `/prs`
+- `/start_reminders` (for 9am reminders every weekday about number of pending PRs)
+- `/stop_reminder` (to remove the channel from reminders)
