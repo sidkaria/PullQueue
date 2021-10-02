@@ -1,4 +1,4 @@
-# PullQueue
+# PullQueue new
 
 PullQueue is a lightweight slack bot/app that listens for all messages in a channel and adds any github pull requests to a queue.
 
