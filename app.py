@@ -12,7 +12,9 @@ slack_token = os.environ["SLACK_BOT_TOKEN"]
 # Initializes your app with your bot token and signing secret
 app = App(
     token=slack_token,
-    signing_secret=os.environ.get("SLACK_SIGNING_SECRET")
+    signing_secret=os.environ.get("SLACK_SIGNING_SECRET"),
+    raise_error_for_unhandled_request=True,
+    request_verification_enabled=False,
 )
 
 # client is needed for the reminder scheduler
@@ -231,6 +233,26 @@ def remove_dividers_from_message(ack, client, body, context: BoltContext):
   if prev_message.get("blocks", None):
     client.chat_update(channel=channel, ts=prev_message["ts"], blocks=new_blocks)
 
+@app.error
+def github_webhook_handler(error, body, logger):
+  action = body.get("action")
+  if not action or action != "closed":
+    return
+  
+  test = client.auth_test()
+  bot_id = test.get("user_id")
+  if not bot_id:
+    return
+
+  pr_number = body.get("number")
+  repo_name = body.get("repository", set()).get("name", "none")
+
+  for channel in reminder_channels:
+    prev_message = find_prev_pinned_message(client, channel, bot_id)
+    did_remove = remove_block_from_message_by_pr_number(prev_message, pr_number, repo_name)
+    if did_remove:
+      edit_resp = client.chat_update(channel=channel, ts=prev_message["ts"], blocks=prev_message["blocks"])
+
 """
 The following methods are internal functionality for the listeners above.
 """
@@ -314,6 +336,17 @@ def find_original_message_from_prev_message_and_index(prev_message, index):
       return github_link, original_message_ts
   return None, None
 
+def remove_block_from_message_by_pr_number(message, pr_number, repo_name):
+  did_remove = False
+  message_blocks = message.get("blocks") if message else []
+  for idx, block in enumerate(message_blocks):
+    if get_pr_number_from_block(block) == str(pr_number) and repo_name in block["text"]["text"].splitlines()[1]:
+      message_blocks = create_new_blocks_for_delete(message, block["accessory"]["value"])
+      did_remove = True
+      break
+  message["blocks"] = message_blocks
+  return did_remove
+
 # remove all blocks with ["text"]["text"] == COMPLETED_TEXT
 def remove_completed_blocks_from_message(message):
   message_remove_completed_blocks = []
@@ -326,6 +359,14 @@ def remove_completed_blocks_from_message(message):
 
 def get_num_prs_from_message_blocks(message_blocks=[]):
   return sum([block.get("accessory", None) is not None for block in message_blocks])
+
+def get_pr_number_from_block(block):
+  if not block.get("accessory", None):
+    return -1
+  text_of_section = block["text"]["text"]
+  github_link = text_of_section.splitlines()[1].strip("<>&.")
+  index_of_last_slash = github_link.rindex("/")
+  return github_link[index_of_last_slash+1:]
 
 def _build_pr_blocks(info: UrlInfo):
   original_message_text = "> %s" % info.original_message[:100] + (" <%s|%s>" % (info.original_message_permalink, ORIGINAL_MESSAGE_LINK_TEXT) if info.original_message_permalink else "")
